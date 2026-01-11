@@ -181,15 +181,357 @@ Incident Response Report from Threat Hunt
 - Monitor SSH and PsExec usage  
 - Conduct ransomware tabletop exercises  
 
+
+
+---
+## Jan 6 Threat Hunt – Ransomware Kill Chain (Azuki Logistics)
+
 ---
 
-## 📎 APPENDIX A — MITRE ATT&CK Mapping
-*(To be expanded)*
+### Flag 1 – Initial Access: Remote SSH Activity
 
-## 📎 APPENDIX B — KQL DETECTIONS
-*(To be expanded)*
+**Use Case:**  
+Identify secure shell–based access from a Windows endpoint used to pivot into Linux backup infrastructure.
 
-## 📎 APPENDIX C — RECOVERY & MTTR ANALYSIS
-*(To be expanded)*
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "azuki-adminpc"
+| where FileName in~ ("ssh.exe","scp.exe","sftp.exe","plink.exe")
+   or ProcessCommandLine has "ssh "
+
+---
+
+### Flag 2 – Lateral Movement: Attack Source Identification
+
+**Use Case:**  
+Correlate authentication events to identify the originating host used to access the backup server.
+
+DeviceLogonEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where LogonType == "Network"
+| where AccountName == "backup-admin"
+
+---
+
+### Flag 3 – Credential Access: Compromised Backup Account
+
+**Use Case:**  
+Confirm abuse of a privileged backup account used to access recovery-critical systems.
+
+DeviceLogonEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "backup-admin"
+
+---
+
+### Flag 4 – Discovery: Directory Enumeration
+
+**Use Case:**  
+Detect file system reconnaissance used to locate backup directories and critical data stores.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "backup-admin"
+| where ProcessCommandLine has_any (
+    "ls",
+    "tree",
+    "find ",
+    "locate ",
+    "dir ",
+    "show flash",
+    "nvram"
+)
+| project TimeGenerated, ProcessCommandLine
+
+---
+
+### Flag 5 – Discovery: Backup Archive Identification
+
+**Use Case:**  
+Identify searches for compressed backup archives likely targeted for destruction or exfiltration.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where ProcessCommandLine contains "find /backups"
+| where ProcessCommandLine contains ".tar.gz"
+| project TimeGenerated, ProcessCommandLine
+
+---
+
+### Flag 6 – Discovery: Local Account Enumeration
+
+**Use Case:**  
+Detect enumeration of local Linux accounts to identify additional targets or escalation paths.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine has "/etc/passwd"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 7 – Discovery: Scheduled Job Reconnaissance
+
+**Use Case:**  
+Identify reconnaissance of cron jobs to understand backup timing and persistence mechanisms.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine contains "cron"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 8 – Command and Control: Tool Download
+
+**Use Case:**  
+Detect external tool downloads used to stage destructive or ransomware-related utilities.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where FileName has_any ("curl", "wget")
+| project TimeGenerated, ProcessCommandLine
+
+---
+
+### Flag 9 – Credential Access: Credential File Theft
+
+**Use Case:**  
+Identify access to plaintext or sensitive credential files stored within backup configurations.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine has_any (
+    "/etc/shadow",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".ssh/authorized_keys",
+    "credentials",
+    "secrets"
+)
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 10 – Impact: Backup Data Destruction
+
+**Use Case:**  
+Detect deletion of backup repositories intended to eliminate recovery options prior to ransomware deployment.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine has_any ("rm","del")
+| where ProcessCommandLine contains "backup"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 11 – Impact: Service Stopped
+
+**Use Case:**  
+Identify immediate service disruption actions used to halt scheduled backup operations.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine has_any ("stop")
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 12 – Impact: Service Disabled
+
+**Use Case:**  
+Detect disabling of services to ensure backup operations do not resume after reboot.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where DeviceName contains "BackupSrv"
+| where ProcessCommandLine has_any ("stop","kill","disable")
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 13 – Lateral Movement: Remote Execution via PsExec
+
+**Use Case:**  
+Detect remote execution tooling used to deploy ransomware across Windows systems.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where FileName =~ "psexec.exe" or ProcessCommandLine contains "psexec"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 14 – Lateral Movement: Ransomware Deployment Command
+
+**Use Case:**  
+Capture full deployment commands revealing targeted hosts, credentials, and malicious payloads.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where ProcessCommandLine contains "PsExec"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 15 – Execution: Ransomware Payload Identification
+
+**Use Case:**  
+Identify the malicious executable responsible for encryption activity.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where ProcessCommandLine contains "silentlynx.exe"
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 16 – Impact: Shadow Copy Service Stopped
+
+**Use Case:**  
+Detect attempts to stop Volume Shadow Copy Services to prevent recovery.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where ProcessCommandLine has_any ("net stop", "sc stop", "vss")
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 17 – Impact: Backup Engine Disabled
+
+**Use Case:**  
+Identify commands stopping Windows backup engines to prevent ongoing protection.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine has_any ("net","sc","vss")
+| project TimeGenerated, AccountName, ProcessCommandLine
+
+---
+
+### Flag 18 – Defense Evasion: Process Termination
+
+**Use Case:**  
+Detect forced termination of processes that lock files prior to encryption.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine contains "taskkill"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 19 – Impact: Shadow Copy Deletion
+
+**Use Case:**  
+Identify deletion of recovery points to permanently remove restore options.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine contains "shadows"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 20 – Impact: Shadow Storage Limitation
+
+**Use Case:**  
+Detect resizing of shadow storage to prevent new recovery points from being created.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where ProcessCommandLine contains "shadowstorage"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 21 – Impact: Recovery Disabled
+
+**Use Case:**  
+Identify disabling of Windows recovery mechanisms to prevent automated repair.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine contains "bcdedit"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 22 – Impact: Backup Catalog Deletion
+
+**Use Case:**  
+Detect deletion of backup catalogs that track available restore points.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine contains "wbadmin"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 23 – Persistence: Registry Autorun
+
+**Use Case:**  
+Identify registry-based persistence mechanisms executed at system startup.
+
+DeviceRegistryEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where RegistryKey has @"\Microsoft\Windows\CurrentVersion\Run"
+| where DeviceName == "azuki-adminpc"
+
+---
+
+### Flag 24 – Persistence: Scheduled Task Execution
+
+**Use Case:**  
+Detect scheduled task creation or execution used to maintain persistence.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where FileName contains "schtasks"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 25 – Defense Evasion: USN Journal Deletion
+
+**Use Case:**  
+Detect deletion of NTFS change journals to hinder forensic reconstruction.
+
+DeviceProcessEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where AccountName == "yuki.tanaka"
+| where ProcessCommandLine contains "fsutil"
+| project TimeGenerated, FileName, AccountName, ProcessCommandLine
+
+---
+
+### Flag 26 – Impact: Ransom Note Creation
+
+**Use Case:**  
+Identify ransom note files indicating successful encryption and attack completion.
+
+DeviceFileEvents
+| where TimeGenerated between (datetime(2025-11-19) .. datetime(2025-12-06))
+| where FileName contains ".txt"
+| project TimeGenerated, FileName, FolderPath
+
+---
+
 
 Azuki Logistics
